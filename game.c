@@ -1,156 +1,275 @@
-#include <ncurses.h> //Ncurses se hum terminal screen ko control kar sakte hain
 #include <stdlib.h>
-#include <unistd.h> // for usleep
+#include <unistd.h>
+#include <curses.h>
+#include <time.h>
+#include <string.h>
 
-// Program ko kuch microseconds ke liye delay ya pause karna.
-// Game loop ke andar, agar tum delay nahi doge toh:
-// Snake bahut fast chalega
-// CPU overload ho sakta hai
-// Player ko khelna mushkil ho jayega
+#define MAX_SCORE 256
+#define FRAME_TIME 110000
 
-// Game settings
-int width = 20;
-int height = 20;
-int headX, headY, fruitX, fruitY, score;
-int tailX[100], tailY[100];
-int nTail;
-int gameOver;
+typedef struct {
+    int x;
+    int y;
+} vec2;
 
-enum direction { STOP = 0, LEFT, RIGHT, UP, DOWN };
-enum direction dir;
+int score = 0;
+char score_message[16];
 
-void Setup() {
-    initscr();              // Start ncurses mode
-    clear();
-    noecho();               // Don't echo typed characters
-    cbreak();               // Disable line buffering
-    curs_set(0);            // Hide the cursor
-    keypad(stdscr, TRUE);   // Enable arrow keys
-    nodelay(stdscr, TRUE);  // Non-blocking input
+bool skip = false;
+bool is_running = true;
 
-    gameOver = 0;
-    dir = STOP;
-    headX = width / 2;
-    headY = height / 2;
-    fruitX = rand() % width;
-    fruitY = rand() % height;
-    score = 0;
-    nTail = 0;
+int screen_width = 25;
+int screen_height = 20;
+
+// initialize screen
+WINDOW *win;
+
+// snake
+vec2 head = { 0, 0 };
+vec2 segments[MAX_SCORE + 1];
+vec2 dir = { 1, 0 };
+// berry
+vec2 berry;
+
+
+bool collide(vec2 a, vec2 b) {
+    if (a.x == b.x && a.y == b.y) {
+        return true;
+    }
+    else return false;
 }
 
-void Draw() {
-    clear();
-
-    // Draw top border
-    for (int i = 0; i < width + 2; i++) printw("#");
-    printw("\n");
-
-    // Draw the game area
-    for (int i = 0; i < height; i++) {
-        for (int j = 0; j < width; j++) {
-            if (j == 0) printw("#"); // Left border
-
-            // Draw the head
-            if (i == headY && j == headX)
-                printw("O");
-            // Draw the fruit
-            else if (i == fruitY && j == fruitX)
-                printw("@");
-            else {
-                int isTail = 0;
-                for (int k = 0; k < nTail; k++) {
-                    if (tailX[k] == j && tailY[k] == i) {
-                        printw("o");
-                        isTail = 1;
-                    }
-                }
-                if (!isTail) printw(" ");
-            }
-
-            // Draw right border
-            if (j == width - 1) printw("#");
+bool collide_snake_body(vec2 point) {
+    for (int i = 0; i < score; i++) {
+        if (collide(point, segments[i])) {
+            return true;
         }
-        printw("\n");
     }
-
-    // Draw bottom border
-    for (int i = 0; i < width + 2; i++) printw("#");
-    
-    printw("\nScore: %d\n", score);
-    refresh();
+    return false;
 }
 
-void Input() {
-    int ch = getch();
-    switch (ch) {
-        case 'a': case KEY_LEFT: dir = LEFT; break;
-        case 'd': case KEY_RIGHT: dir = RIGHT; break;
-        case 'w': case KEY_UP: dir = UP; break;
-        case 's': case KEY_DOWN: dir = DOWN; break;
-        case 'x': gameOver = 1; break;
+vec2 spawn_berry() {
+    // spawn a new berry with 1 pixel padding from edges and not inside of the snake
+    vec2 berry = { 1 + rand() % (screen_width - 2), 1 + rand() % (screen_height - 2) };
+    while (collide(head, berry) || collide_snake_body(berry)) {
+        berry.x = 1 + rand() % (screen_width - 2);
+        berry.y = 1 + rand() % (screen_height - 2);
     }
+    return berry;
 }
 
-void Logic() {
-    int previousX = tailX[0], previousY = tailY[0];  // Save the old position of the first part of the tail
-    int secondPreviousX, secondPreviousY;            // Variables to remember the previous positions of the next parts of the tail
-    tailX[0] = headX;                                // Move the first part of the tail to where the head was
-    tailY[0] = headY;                                // Move the first part of the tail to where the head was
-    
-    for (int i = 1; i < nTail; i++) {                // For all the other parts of the tail (starting from the second part)
-        secondPreviousX = tailX[i];                   // Remember the current position of this tail part
-        secondPreviousY = tailY[i];                   // Remember the current position of this tail part
-
-        tailX[i] = previousX;                         // Move this tail part to the previous position of the previous tail part
-        tailY[i] = previousY;                         // Move this tail part to the previous position of the previous tail part
-
-        previousX = secondPreviousX;                  // Now, set the 'previous' position to where this tail part was
-        previousY = secondPreviousY;                  // Now, set the 'previous' position to where this tail part was
+void draw_border(int y, int x, int width, int height) {
+    // top row
+    mvaddch(y, x, ACS_ULCORNER);
+    mvaddch(y, x + width * 2 + 1, ACS_URCORNER);
+    for (int i = 1; i < width * 2 + 1; i++) {
+        mvaddch(y, x + i, ACS_HLINE);
     }
-
-    // Move the snake's head
-    switch (dir) {
-        case LEFT: headX--; break;
-        case RIGHT: headX++; break;
-        case UP: headY--; break;
-        case DOWN: headY++; break;
-        default: break;
+    // vertical lines
+    for (int i = 1; i < height + 1; i++) {
+        mvaddch(y + i, x, ACS_VLINE);
+        mvaddch(y + i, x + width * 2 + 1, ACS_VLINE);
     }
-
-    // Boundary collision
-    if (headX >= width || headX < 0 || headY >= height || headY < 0)
-        gameOver = 1;
-
-    // Self collision
-    for (int i = 0; i < nTail; i++) {
-        if (tailX[i] == headX && tailY[i] == headY)
-            gameOver = 1;
-    }
-
-    // Fruit eaten
-    if (headX == fruitX && headY == fruitY) {
-        score += 10;
-        fruitX = rand() % width;
-        fruitY = rand() % height;
-        nTail++;
+    // bottom row
+    mvaddch(y + height + 1, x, ACS_LLCORNER);
+    mvaddch(y + height + 1, x + width * 2 + 1, ACS_LRCORNER);
+    for (int i = 1; i < width * 2 + 1; i++) {
+        mvaddch(y + height + 1, x + i, ACS_HLINE);
     }
 }
 
-int main() {
-    Setup();
-    while (!gameOver) {
-        Draw();
-        Input();
-        Logic();
-        usleep(100000); // 0.1 second delay
+void quit_game() {
+    // exit cleanly from application
+    endwin();
+    // clear screen, place cursor on top, and un-hide cursor
+    printf("\e[1;1H\e[2J");
+    printf("\e[?25h");
+
+    exit(0);
+}
+
+void restart_game() {
+    head.x = 0;
+    head.y = 0;
+    dir.x = 1;
+    dir.y = 0;
+    score = 0;
+    sprintf(score_message, "[ Score: %d ]", score);
+    is_running = true;
+}
+
+void init() {
+    srand(time(NULL));
+    // initialize window
+    win = initscr();
+    // take player input and hide cursor
+    keypad(win, true);
+    noecho();
+    nodelay(win, true);
+    curs_set(0);
+
+    // initialize color
+    if (has_colors() == FALSE) {
+        endwin();
+        fprintf(stderr, "Your terminal does not support color\n");
+        exit(1);
+    }
+    start_color();
+    use_default_colors();
+    init_pair(1, COLOR_RED, -1);
+    init_pair(2, COLOR_GREEN, -1);
+    init_pair(3, COLOR_YELLOW, -1);
+
+
+    berry.x = rand() % screen_width;
+    berry.y = rand() % screen_height;
+
+    // update score message
+    sprintf(score_message, "[ Score: %d ]", score);
+}
+
+void process_input() {
+    int pressed = wgetch(win);
+    if (pressed == KEY_LEFT) {
+        if (dir.x == 1) {
+            return;
+            skip = true;
+        }
+        dir.x = -1;
+        dir.y = 0;
+    }
+    if (pressed == KEY_RIGHT) {
+        if (dir.x == -1) {
+            return;
+            skip = true;
+        }
+        dir.x = 1;
+        dir.y = 0;
+    }
+    if (pressed == KEY_UP) {
+        if (dir.y == 1) {
+            return;
+            skip = true;
+        }
+        dir.x = 0;
+        dir.y = -1;
+    }
+    if (pressed == KEY_DOWN) {
+        if (dir.y == -1) {
+            return;
+            skip = true;
+        }
+        dir.x = 0;
+        dir.y = 1;
+    }
+    if (pressed == ' ') {
+        if (!is_running)
+            restart_game();
+    }
+    if (pressed == '\e') {
+        is_running = false;
+        quit_game();
+    }
+}
+
+void game_over() {
+    while (is_running == false) {
+        process_input();
+
+        mvaddstr(screen_height / 2, screen_width - 16, "              Game Over          ");
+        mvaddstr(screen_height / 2 + 1, screen_width - 16, "[SPACE] to restart, [ESC] to quit ");
+        attron(COLOR_PAIR(3));
+        draw_border(screen_height / 2 - 1, screen_width - 17, 17, 2);
+        attroff(COLOR_PAIR(3));
+
+        usleep(FRAME_TIME);
+    }
+}
+
+void update() {
+    // update snake segments
+    for (int i = score; i > 0; i--) {
+        segments[i] = segments[i - 1];
+    }
+    segments[0] = head;
+
+    // move snake
+    head.x += dir.x;
+    head.y += dir.y;
+
+    // collide with body or walls
+    if (collide_snake_body(head) || head.x < 0 || head.y < 0 \
+            || head.x >= screen_width || head.y >= screen_height) {
+        is_running = false;
+        game_over();
     }
 
-    clear();
-    printw("Game Over! Final Score: %d\n", score);
-    refresh();
-    nodelay(stdscr, FALSE);
-    getch(); // Wait for key before exiting
-    endwin(); // End ncurses mode
+    // eating a berry
+    if (collide(head, berry)) {
+        if (score < MAX_SCORE) {
+            score += 1;
+            sprintf(score_message, "[ Score: %d ]", score);
+        }
+        else {
+            // WIN!
+            printf("You Win!");
+        }
+        berry = spawn_berry();
+    }
 
+    usleep(FRAME_TIME);
+}
+
+void draw() {
+    erase();
+
+    attron(COLOR_PAIR(1));
+    mvaddch(berry.y+1, berry.x * 2+1, '@');
+    attroff(COLOR_PAIR(1));
+
+    // draw snake
+    attron(COLOR_PAIR(2));
+    for (int i = 0; i < score; i++) {
+        mvaddch(segments[i].y+1, segments[i].x * 2 + 1, ACS_DIAMOND);
+    }
+    mvaddch(head.y+1, head.x * 2+1, 'O');
+    attroff(COLOR_PAIR(2));
+
+    attron(COLOR_PAIR(3));
+    draw_border(0, 0, screen_width, screen_height);
+    attroff(COLOR_PAIR(3));
+    mvaddstr(0, screen_width - 5, score_message);
+}
+
+int main(int argc, char *argv[]) {
+    // process user args
+    if (argc == 1) {}
+    else if (argc == 3) {
+        if (!strcmp(argv[1], "-d")) {
+            if (sscanf(argv[2], "%dx%d", &screen_width, &screen_height) != 2) {
+                printf("Usage: snake [options]\nOptions:\n -d [width]x[height]"
+                       "\tdefine dimensions of the screen\n\nDefault dimensions are 25x20\n");
+                exit(1);
+            }
+        }
+    }
+    else {
+        printf("Usage: snake [options]\nOptions:\n -d [width]x[height]"
+               "\tdefine dimensions of the screen\n\nDefault dimensions are 25x20\n");
+        exit(1);
+    }
+
+    init();
+    while(is_running) {
+        process_input();
+        if (skip == true) {
+            skip = false;
+            continue;
+        }
+
+        update();
+        draw();
+    }
+    quit_game();
     return 0;
 }
