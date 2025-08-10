@@ -18,10 +18,10 @@ Once the project is cloned into a directory, cd into that directory, and run the
 ## Running the Project
 To run with default configuration:
 ```
-  $ ./snake
+  $ ./game
 ```
 To configure the dimensions of the play area
 ```
-  $ ./snake -d [width]x[height]
+  $ ./game -d [width]x[height]
 ```
 Any other options given will just print the help information
