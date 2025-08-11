@@ -1,2 +1,2 @@
 build:
-	cc make.c -lncurses -o make
+	cc game.c -lncurses -o game
